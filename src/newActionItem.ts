@@ -9,6 +9,7 @@ interface ActionItemData {
   dueDate: string;
   description: string;
   assignee: string;
+  priority: string;
   parentEpic?: string;
   parentStory?: string;
   dependency?: string;
@@ -29,6 +30,7 @@ class ActionItemModal extends Modal {
     dueDate: "",
     description: "",
     assignee: "",
+    priority: "",
     parentEpic: "",
     parentStory: "",
     dependency: "",
@@ -41,6 +43,8 @@ class ActionItemModal extends Modal {
   private cache: ProjectCache;
   private dependencySetting?: Setting;
   private dependencyDropdown?: DropdownComponent;
+  private parentEpicSetting?: Setting;
+  private parentEpicDropdown?: DropdownComponent;
   private parentStorySetting?: Setting;
   private parentStoryDropdown?: DropdownComponent;
 
@@ -143,6 +147,25 @@ class ActionItemModal extends Modal {
       .sort((a, b) => a.id.localeCompare(b.id));
   }
 
+  private updateParentEpicDropdown() {
+    if (!this.parentEpicDropdown) return;
+
+    // Clear existing options
+    this.parentEpicDropdown.selectEl.empty();
+    this.parentEpicDropdown.addOption("", "Select an epic...");
+
+    // Add epics from selected project
+    if (this.data.project) {
+      const epics = this.getEpicsForProject(this.data.project);
+      epics.forEach(epic => {
+        this.parentEpicDropdown!.addOption(epic.id, epic.displayText);
+      });
+    }
+
+    // Reset the value
+    this.parentEpicDropdown.setValue(this.data.parentEpic || "");
+  }
+
   private updateParentStoryDropdown() {
     if (!this.parentStoryDropdown || !this.data.parentEpic) return;
 
@@ -160,6 +183,26 @@ class ActionItemModal extends Modal {
 
     // Reset the value
     this.parentStoryDropdown.setValue(this.data.parentStory || "");
+  }
+
+  private updateParentControlsVisibility() {
+    // Show/hide parent epic based on type
+    if (this.parentEpicSetting) {
+      if (this.data.type === "story" || this.data.type === "subtask") {
+        this.parentEpicSetting.settingEl.style.display = "";
+      } else {
+        this.parentEpicSetting.settingEl.style.display = "none";
+      }
+    }
+
+    // Show/hide parent story based on type
+    if (this.parentStorySetting) {
+      if (this.data.type === "subtask") {
+        this.parentStorySetting.settingEl.style.display = "";
+      } else {
+        this.parentStorySetting.settingEl.style.display = "none";
+      }
+    }
   }
 
   onOpen() {
@@ -181,7 +224,8 @@ class ActionItemModal extends Modal {
           // Update dependency dropdown when project changes
           this.updateDependencyDropdown();
           // Update parent dropdowns when project changes
-          if (this.data.type === "story" || this.data.type === "subtask") {
+          this.updateParentEpicDropdown();
+          if (this.data.type === "subtask") {
             this.updateParentStoryDropdown();
           }
         });
@@ -198,6 +242,8 @@ class ActionItemModal extends Modal {
         dropdown.setValue(this.data.type);
         dropdown.onChange((value) => {
           this.data.type = value as "epic" | "story" | "subtask";
+          // Update parent controls visibility
+          this.updateParentControlsVisibility();
         });
       });
 
@@ -214,50 +260,50 @@ class ActionItemModal extends Modal {
       });
 
     // Step 4: Parent Epic (for Stories and Subtasks)
-    if (this.data.type === "story" || this.data.type === "subtask") {
-      new Setting(contentEl)
-        .setName("Parent Epic")
-        .setDesc("Select which epic this story/subtask belongs to")
-        .addDropdown((dropdown: DropdownComponent) => {
-          dropdown.addOption("", "Select an epic...");
-          if (this.data.project) {
-            const epics = this.getEpicsForProject(this.data.project);
-            epics.forEach(epic => {
-              dropdown.addOption(epic.id, epic.displayText);
-            });
-          }
-          dropdown.setValue(this.data.parentEpic || "");
-          dropdown.onChange((value) => {
-            this.data.parentEpic = value;
-            // Update parent story dropdown if this is a subtask
-            if (this.data.type === "subtask") {
-              this.updateParentStoryDropdown();
-            }
+    this.parentEpicSetting = new Setting(contentEl)
+      .setName("Parent Epic")
+      .setDesc("Select which epic this story/subtask belongs to")
+      .addDropdown((dropdown: DropdownComponent) => {
+        this.parentEpicDropdown = dropdown;
+        dropdown.addOption("", "Select an epic...");
+        if (this.data.project) {
+          const epics = this.getEpicsForProject(this.data.project);
+          epics.forEach(epic => {
+            dropdown.addOption(epic.id, epic.displayText);
           });
+        }
+        dropdown.setValue(this.data.parentEpic || "");
+        dropdown.onChange((value) => {
+          this.data.parentEpic = value;
+          // Update parent story dropdown if this is a subtask
+          if (this.data.type === "subtask") {
+            this.updateParentStoryDropdown();
+          }
         });
-    }
+      });
 
     // Step 5: Parent Story (for Subtasks only)
-    if (this.data.type === "subtask") {
-      this.parentStorySetting = new Setting(contentEl)
-        .setName("Parent Story")
-        .setDesc("Select which story this subtask belongs to")
-        .addDropdown((dropdown: DropdownComponent) => {
-          this.parentStoryDropdown = dropdown;
-          dropdown.addOption("", "Select a story...");
-          dropdown.setValue(this.data.parentStory || "");
-          dropdown.onChange((value) => {
-            this.data.parentStory = value;
-          });
+    this.parentStorySetting = new Setting(contentEl)
+      .setName("Parent Story")
+      .setDesc("Select which story this subtask belongs to")
+      .addDropdown((dropdown: DropdownComponent) => {
+        this.parentStoryDropdown = dropdown;
+        dropdown.addOption("", "Select a story...");
+        dropdown.setValue(this.data.parentStory || "");
+        dropdown.onChange((value) => {
+          this.data.parentStory = value;
         });
-    }
+      });
+    
+    // Set initial visibility
+    this.updateParentControlsVisibility();
 
     // Step 6: Start Date
     new Setting(contentEl)
       .setName("Start Date")
-      .setDesc("When should this action item start?")
+      .setDesc("Optional: When should this action item start?")
       .addText((text) => {
-        text.setPlaceholder("YYYY-MM-DD");
+        text.setPlaceholder("YYYY-MM-DD (optional)");
         text.setValue(this.data.startDate);
         text.onChange((value) => {
           this.data.startDate = value;
@@ -267,9 +313,9 @@ class ActionItemModal extends Modal {
     // Step 7: Due Date
     new Setting(contentEl)
       .setName("Due Date")
-      .setDesc("When should this action item be completed?")
+      .setDesc("Optional: When should this action item be completed?")
       .addText((text) => {
-        text.setPlaceholder("YYYY-MM-DD");
+        text.setPlaceholder("YYYY-MM-DD (optional)");
         text.setValue(this.data.dueDate);
         text.onChange((value) => {
           this.data.dueDate = value;
@@ -292,19 +338,43 @@ class ActionItemModal extends Modal {
     // Step 9: Assignee
     new Setting(contentEl)
       .setName("Assignee")
-      .setDesc("Who is responsible for this action item?")
-      .addDropdown((dropdown: DropdownComponent) => {
-        dropdown.addOption("", "Select an assignee...");
-        this.assignees.forEach(assignee => {
-          dropdown.addOption(assignee, assignee);
-        });
-        dropdown.setValue(this.data.assignee);
-        dropdown.onChange((value) => {
+      .setDesc("Who is responsible for this action item? (Type a new name or select from existing)")
+      .addText((text) => {
+        text.setPlaceholder("Enter or select assignee...");
+        text.setValue(this.data.assignee);
+        text.onChange((value) => {
           this.data.assignee = value;
+        });
+        
+        // Add datalist for autocomplete
+        const datalistId = "assignee-datalist";
+        const datalist = text.inputEl.parentElement?.createEl("datalist");
+        if (datalist) {
+          datalist.id = datalistId;
+          this.assignees.forEach(assignee => {
+            datalist.createEl("option", { value: assignee });
+          });
+          text.inputEl.setAttribute("list", datalistId);
+        }
+      });
+
+    // Step 10: Priority
+    new Setting(contentEl)
+      .setName("Priority")
+      .setDesc("Set the priority level for this action item")
+      .addDropdown((dropdown: DropdownComponent) => {
+        dropdown.addOption("", "No priority");
+        dropdown.addOption("critical", "Critical");
+        dropdown.addOption("high", "High");
+        dropdown.addOption("medium", "Medium");
+        dropdown.addOption("low", "Low");
+        dropdown.setValue(this.data.priority);
+        dropdown.onChange((value) => {
+          this.data.priority = value;
         });
       });
 
-    // Step 10: Dependency Type (Optional)
+    // Step 11: Dependency Type (Optional)
     new Setting(contentEl)
       .setName("Dependency Type")
       .setDesc("Optional: Type of dependency relationship")
@@ -320,7 +390,7 @@ class ActionItemModal extends Modal {
         });
       });
 
-    // Step 11: Dependency (Optional)
+    // Step 12: Dependency (Optional)
     this.dependencySetting = new Setting(contentEl)
       .setName("Dependency")
       .setDesc("Optional: What does this action item depend on?")
@@ -357,14 +427,6 @@ class ActionItemModal extends Modal {
     }
     if (!this.data.description.trim()) {
       new Notice("Please enter a description");
-      return;
-    }
-    if (!this.data.startDate) {
-      new Notice("Please enter a start date");
-      return;
-    }
-    if (!this.data.dueDate) {
-      new Notice("Please enter a due date");
       return;
     }
     if (!this.data.assignee) {
@@ -434,12 +496,28 @@ class ActionItemModal extends Modal {
 
   private createTaskLine(taskId: string): string {
     const parts = [
-      `- [ ] ${taskId} ${this.data.title}`,
-      `  start:: ${this.data.startDate}`,
-      `  due:: ${this.data.dueDate}`,
-      `  assignee:: ${this.data.assignee}`
+      `- [ ] ${taskId} ${this.data.title}`
     ];
 
+    // Add start date if provided
+    if (this.data.startDate && this.data.startDate.trim()) {
+      parts.push(`  start:: ${this.data.startDate}`);
+    }
+
+    // Add due date if provided
+    if (this.data.dueDate && this.data.dueDate.trim()) {
+      parts.push(`  due:: ${this.data.dueDate}`);
+    }
+
+    // Add assignee
+    parts.push(`  assignee:: ${this.data.assignee}`);
+
+    // Add priority if provided
+    if (this.data.priority && this.data.priority.trim()) {
+      parts.push(`  priority:: ${this.data.priority}`);
+    }
+
+    // Add dependency if provided
     if (this.data.dependency && this.data.dependency.trim()) {
       let dependencyLine = `  depends:: ${this.data.dependency.trim()}`;
       if (this.data.dependencyType && this.data.dependencyType.length > 0) {
@@ -529,9 +607,10 @@ class ActionItemModal extends Modal {
     const taskId = taskLine.match(/- \[ \] ([A-Z]+-\d+)/)?.[1] || "";
     const title = `- [ ] ${this.data.title}`;
     const assignee = `assignee:: ${this.data.assignee}`;
-    const startDate = `start:: ${this.data.startDate}`;
-    const dueDate = `due:: ${this.data.dueDate}`;
+    const startDate = this.data.startDate && this.data.startDate.trim() ? `start:: ${this.data.startDate}` : "";
+    const dueDate = this.data.dueDate && this.data.dueDate.trim() ? `due:: ${this.data.dueDate}` : "";
     const description = this.data.description;
+    const priority = this.data.priority && this.data.priority.trim() ? this.data.priority : "";
     
     let dependency = "";
     if (this.data.dependency && this.data.dependency.trim()) {
@@ -541,13 +620,13 @@ class ActionItemModal extends Modal {
     }
     
     if (type === "epic") {
-      return `| ${taskId} | ${title} | ${assignee} | ${startDate} | ${dueDate} | ${description} |`;
+      return `| ${taskId} | ${title} | ${assignee} | ${priority} | ${startDate} | ${dueDate} | ${description} |`;
     } else if (type === "story") {
       const parentEpic = this.data.parentEpic || "E-1";
-      return `| ${taskId} | ${parentEpic} | ${title} | ${dependency} | ${assignee} | 1 | ${startDate} | ${dueDate} | ${description} |`;
+      return `| ${taskId} | ${parentEpic} | ${title} | ${dependency} | ${assignee} | ${priority} | 1 | ${startDate} | ${dueDate} | ${description} |`;
     } else if (type === "subtask") {
       const parentStory = this.data.parentStory || "S-1";
-      return `| ${taskId} | ${parentStory} | ${title} | ${dependency} | ${assignee} | ${startDate} | ${dueDate} | ${description} |`;
+      return `| ${taskId} | ${parentStory} | ${title} | ${dependency} | ${assignee} | ${priority} | ${startDate} | ${dueDate} | ${description} |`;
     }
     
     return taskLine;

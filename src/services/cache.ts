@@ -142,8 +142,8 @@ meta.listItems?.forEach((item: any) => {
      to a regex on the source line.
   ----------------------------------------------------------- */
   const firstLineRaw = fileLines[item.position.start.line] ?? "";
-  // Accept [ ], [x], [X], or [/] for open/in-progress/done states
-  const tableTaskMatch = /^\s*\|.*-\s*\[[ xX/]\]/.test(firstLineRaw);
+  // Accept [ ], [x], [X], [/], or [-] for open/in-progress/on-hold/done states
+  const tableTaskMatch = /^\s*\|.*-\s*\[[ xX/\-]\]/.test(firstLineRaw);
 
   if (!item.task && !tableTaskMatch) return;        // not a task at all
 
@@ -194,6 +194,16 @@ meta.listItems?.forEach((item: any) => {
     if (cells.length >= 2 && cells[1] && cells[1].trim().match(/^[Ss]-\d+$/)) {
       props["story"] = cells[1].trim();
     }
+    
+    // Extract priority from table cells
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i].toLowerCase().trim();
+      if (['critical', 'crit', 'c', 'p0', 'highest', 'high', 'h', '1', 'p1', 'medium', 'med', 'm', '2', 'p2', 'low', 'l', '3', 'p3'].includes(cell)) {
+        props["priority"] = cells[i].trim();
+        break;
+      }
+    }
+    
     /* Heuristic: walk from right to left until we find the first non‑date cell */
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
     for (let i = cells.length - 1; i >= 2; i--) {  // skip ID + Summary columns
@@ -237,10 +247,10 @@ meta.listItems?.forEach((item: any) => {
   /* ---------- derive text, checked, and status ---------- */
   const stripped = rawBlock
     .replace(/^\s*\|?\s*/g, "")            // drop leading pipe / whitespace
-    .replace(/^\s*-\s*\[[\sxX/]\]\s*/, "")  // remove leading checkbox (now includes /)
+    .replace(/^\s*-\s*\[[\sxX/\-]\]\s*/, "")  // remove leading checkbox (includes /, -)
     .replace(/(\w+)::\s*[^\s]+/g, "")      // drop inline props
     .trim();
-  // Only [x] or [X] is checked; [/] is in-progress but not checked
+  // Only [x] or [X] is checked; [/] is in-progress, [-] is on-hold but not checked
   const isChecked =
     Boolean(item.task?.checked) || /\-\s*\[[xX]\]/.test(firstLineRaw);
   // Status: [x] or [X] = done, [/] = in-progress, [-] = on-hold, else not-started
@@ -305,6 +315,15 @@ fileLines.forEach((line, idx) => {
       props["story"] = cells[1].trim();
     }
 
+    // Extract priority from table cells
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i].toLowerCase().trim();
+      if (['critical', 'crit', 'c', 'p0', 'highest', 'high', 'h', '1', 'p1', 'medium', 'med', 'm', '2', 'p2', 'low', 'l', '3', 'p3'].includes(cell)) {
+        props["priority"] = cells[i].trim();
+        break;
+      }
+    }
+
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
     for (let i = cells.length - 1; i >= 2; i--) {
       const cand = cells[i];
@@ -341,7 +360,7 @@ fileLines.forEach((line, idx) => {
     status = "not-started";
   }
   const stripped  = line
-    .replace(/^\s*\|.*?-\s*\[[\sxX\/\-]\]\s*/, "")   // from bullet to first cell (now includes / and -)
+    .replace(/^\s*\|.*?-\s*\[[\sxX\/\-]\]\s*/, "")   // from bullet to first cell (includes /, -)
     .replace(/\|.*/, "")                         // drop remaining cells
     .replace(/(\w+)::\s*[^|]+/g, "")             // drop inline props
     .trim();

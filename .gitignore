@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+main.js
+main.js.map
+*.d.ts
+
+# Release directory
+release/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

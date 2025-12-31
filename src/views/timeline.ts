@@ -8,6 +8,7 @@ interface ExtendedTaskItem extends TaskItem {
   done?: boolean | string;
   percentComplete?: number;
   raw?: string;
+  priority?: string;
 }
 
 // Extended milestone interface for timeline view
@@ -17,6 +18,26 @@ interface ExtendedMilestone extends Milestone {
   name?: string;
   description?: string;
 }
+
+/**
+ * Get task priority from task properties
+ */
+function getTaskPriority(task: TaskItem): string {
+  const priority = task.props["priority"]?.replace(/\u00A0/g, " ").trim().toLowerCase();
+  if (!priority) return "";
+  
+  // Critical priority
+  if (["critical", "crit", "c", "p0", "highest"].includes(priority)) return "critical";
+  // High priority
+  if (["high", "h", "1", "p1"].includes(priority)) return "high";
+  // Medium priority
+  if (["medium", "med", "m", "2", "p2"].includes(priority)) return "medium";
+  // Low priority
+  if (["low", "l", "3", "p3"].includes(priority)) return "low";
+  
+  return "";
+}
+
 // Load timeline-specific stylesheet
 import "../../styles/styles-timeline.css";
 /** Trigger native date picker for timeline dates */
@@ -70,7 +91,7 @@ function triggerNativeDatePicker(currentDate: string, onSelect: (date: string | 
 }
 
 /** Discrete zoom stops (px per day) shown in the slider */
-const ZOOM_STOPS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+const ZOOM_STOPS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20];
 
 
 /** ── Simple drag context for Alt‑drag bar move or resize ───────────────── */
@@ -143,6 +164,8 @@ export class TimelineView extends ItemView {
   private hiddenProjects = new Set<string>();
   /** Whether to hide bars when projects are collapsed */
   private hideBarsWhenCollapsed = false;
+  /** Collapsed Epic/Story tasks for hierarchical collapse */
+  private collapsedTasks = new Set<string>();
 
   /** Optional set of project file paths to display (injected by Portfolio view) */
   private filterPaths?: Set<string>;
@@ -309,6 +332,11 @@ export class TimelineView extends ItemView {
       const raw = (anyT.raw ?? t.text ?? "").toString();
       return /^\s*-\s*\[[xX]\]/.test(raw);
     };
+    
+    /** Check if task is on-hold */
+    const isTaskOnHold = (t: TaskItem): boolean => {
+      return t.status === "on-hold";
+    };
 
     // Helper function to render a single task
     const renderTask = (task: TaskItem, project: ProjectEntry) => {
@@ -324,12 +352,17 @@ export class TimelineView extends ItemView {
       // Create task label with proper indentation and styling
       const taskText = task.text.split("\n")[0].trim();
       
-      // Add bullet point or check icon for completed tasks
+      // Add bullet point or check icon for completed tasks or pause icon for on-hold
       if (isTaskDone(task)) {
         const chk = rowLeft.createEl("span");
         setIcon(chk, "check-circle");
         chk.addClass("pm-task-check");
         chk.style.marginRight = "4px";
+      } else if (isTaskOnHold(task)) {
+        const hold = rowLeft.createEl("span");
+        setIcon(hold, "pause-circle");
+        hold.addClass("pm-task-hold");
+        hold.style.marginRight = "4px";
       } else {
         const bullet = rowLeft.createEl("span", { 
           text: "•", 
@@ -339,7 +372,7 @@ export class TimelineView extends ItemView {
       
       const taskLink = rowLeft.createEl("a", {
         text: taskText, // Use full text, let CSS handle truncation
-        href: `${project.file.path}#^${task.id}`,
+        href: `${project.file.path}#L${task.line + 1}`,
       });
 
       // Add ID prefix
@@ -472,6 +505,10 @@ export class TimelineView extends ItemView {
           bar.style.width = `${Math.max(spanDays * pxPerDay, 3)}px`;
           bar.style.zIndex = "2";
 
+          // Add priority border color
+          const priority = getTaskPriority(task);
+          if (priority) bar.addClass(`pm-priority-${priority}`);
+
           // Color by task type
           const id = task.id.toLowerCase();
           if (id.startsWith("e")) bar.addClass("pm-bar-e");
@@ -480,12 +517,15 @@ export class TimelineView extends ItemView {
 
           // Completed state (match normal mode)
           const isDone = isTaskDone(task);
+          const isOnHold = isTaskOnHold(task);
           if (isDone) {
             bar.addClass("pm-tl-bar-done");
+          } else if (isOnHold) {
+            bar.addClass("pm-tl-bar-hold");
           }
 
           // Urgency color
-          if (!isDone) {
+          if (!isDone && !isOnHold) {
             const dOff = due.diff(today, "days");
             if (dOff < 0) bar.addClass("pm-bar-overdue");
             else if (dOff <= 10) bar.addClass("pm-bar-warning");
@@ -511,6 +551,8 @@ export class TimelineView extends ItemView {
               const startIso = (task.props["start"] ?? "").replace(/\u00A0/g, " ").trim();
               const dueIso = (task.props["due"] ?? "").replace(/\u00A0/g, " ").trim();
               const desc = getDescription(task);
+              const priority = getTaskPriority(task);
+              const priorityText = priority ? priority.charAt(0).toUpperCase() + priority.slice(1) : "—";
               
               return `
                 <strong>${idPrefix}${shortTxt}</strong>${desc ? `<br><em>${desc}</em>` : ""}
@@ -518,6 +560,7 @@ export class TimelineView extends ItemView {
                 <br><span>Start: ${fmt(startIso)}</span>
                 <br><span>Due&nbsp;&nbsp;: ${fmt(dueIso)}</span>
                 <br><span>Assignee:&nbsp;${who}</span>
+                <br><span>Priority: ${priorityText}</span>
               `;
             };
 
@@ -735,6 +778,10 @@ export class TimelineView extends ItemView {
       if (this.hiddenProjects.has(project.file.path)) return;
       
       project.tasks.forEach((task: TaskItem) => {
+        // Filter out completed and on-hold tasks if settings enabled
+        if (this.plugin.settings.hideCompletedTasks && isTaskDone(task)) return;
+        if (this.plugin.settings.hideOnHoldTasks && isTaskOnHold(task)) return;
+        
         const startIso = (task.props["start"] ?? "").replace(/\u00A0/g, " ").trim();
         if (startIso) {
           // @ts-ignore callable moment
@@ -1196,7 +1243,7 @@ export class TimelineView extends ItemView {
     const injectGuidelines = () => {
       // Remove previous guideline DIVs
       rightPane
-        .querySelectorAll(".pm-month-line, .pm-weekend-line, .pm-today-line, .pm-milestone-line")
+        .querySelectorAll(".pm-month-line, .pm-weekend-line, .pm-today-line, .pm-milestone-line, .pm-milestone-label")
         .forEach(el => el.remove());
 
       const lastRow = rightPane.querySelector<HTMLElement>(".pm-tl-row:last-child");
@@ -1222,7 +1269,10 @@ export class TimelineView extends ItemView {
           let html: string | undefined;
           if (cls === "pm-milestone-line") {
             const off = Math.round(left / pxPerDay);
-            html = milestoneMap.get(off);
+            const fullData = milestoneMap.get(off);
+            if (fullData) {
+              html = fullData.split('|||')[0];  // Extract HTML part
+            }
           } else { /* today bar */
             // Show the real calendar date, not the timeline anchor
             // @ts-ignore callable moment bundled by Obsidian
@@ -1264,7 +1314,36 @@ export class TimelineView extends ItemView {
       /* ---- milestone guideline lines ---- */
       if (this.plugin.settings.showMilestones !== false) {
         milestoneOffsets.forEach((offset) => {
-          addLine("pm-milestone-line", offset * pxPerDay, 2);   // thin 2-px bar
+          const leftPx = offset * pxPerDay;
+          addLine("pm-milestone-line", leftPx, 2);   // thin 2-px bar
+          
+          // Add milestone title label in header area
+          const milestoneData = milestoneMap.get(offset);
+          if (milestoneData) {
+            // Extract label text from stored data
+            const parts = milestoneData.split('|||');
+            if (parts.length > 1) {
+              const labelText = parts[1];
+              const label = document.createElement("div");
+              label.className = "pm-milestone-label";
+              label.textContent = labelText;
+              label.style.position = "absolute";
+              label.style.left = `${leftPx + 4}px`;
+              label.style.top = "2px";  // Top of header area
+              label.style.fontSize = "11px";
+              label.style.fontWeight = "700";
+              label.style.color = "var(--color-orange)";
+              label.style.backgroundColor = "var(--background-primary)";
+              label.style.padding = "2px 5px";
+              label.style.borderRadius = "3px";
+              label.style.whiteSpace = "nowrap";
+              label.style.pointerEvents = "none";
+              label.style.zIndex = "1000";  // Very high to stay on top
+              label.style.boxShadow = "0 2px 4px rgba(0,0,0,0.3)";
+              label.style.border = "1px solid var(--color-orange)";
+              headerWrap.appendChild(label);  // Add to header instead of rightPane
+            }
+          }
         });
       }      
     };
@@ -1325,6 +1404,11 @@ export class TimelineView extends ItemView {
       if (typeof t.percentComplete === "number" && t.percentComplete >= 1) return true;
       const raw = (t.raw ?? t.text ?? "").toString();
       return /^\s*-\s*\[[xX]\]/.test(raw);
+    }
+    
+    /** Detect whether a task is on-hold */
+    function tlIsTaskOnHold(t: TaskItem): boolean {
+      return t.status === "on-hold";
     }
 
     const filterSet = this.filterPaths
@@ -1552,6 +1636,10 @@ export class TimelineView extends ItemView {
     if (!zoomWrap) {
       zoomWrap = topHeader.createEl("div", { cls: "pm-zoom-wrap" });
       zoomWrap.style.zIndex = "6";
+      zoomWrap.style.display = "flex";
+      zoomWrap.style.alignItems = "center";
+      zoomWrap.style.gap = "16px";
+      
       const label = zoomWrap.createEl("span", { cls: "pm-zoom-label", text: "Zoom:" });
 
       const slider = zoomWrap.createEl("input") as HTMLInputElement;
@@ -1579,6 +1667,63 @@ export class TimelineView extends ItemView {
           this.batchRender("zoom-change");
         }
       };
+      
+      // Add time navigation slider next to zoom
+      const timeNavSep = zoomWrap.createEl("span", { text: "|" });
+      timeNavSep.style.color = "var(--text-faint)";
+      timeNavSep.style.margin = "0 4px";
+      
+      const navLabel = zoomWrap.createEl("span", { 
+        cls: "pm-time-nav-label",
+        text: "Timeline:"
+      });
+      
+      const timeSlider = zoomWrap.createEl("input") as HTMLInputElement;
+      timeSlider.type = "range";
+      timeSlider.min = "0";
+      timeSlider.max = "100";
+      timeSlider.value = "0";
+      timeSlider.className = "pm-time-slider";
+      
+      const dateDisplay = zoomWrap.createEl("span", { cls: "pm-time-display" });
+      
+      // Setup time navigation - will be finalized after rightPane is ready
+      requestAnimationFrame(() => {
+        const rightEl = this.containerEl.querySelector<HTMLElement>(".pm-tl-right");
+        if (rightEl && timeSlider && dateDisplay) {
+          const totalWidth = horizon * pxPerDay;
+          const viewportWidth = rightEl.clientWidth;
+          const maxScroll = Math.max(0, totalWidth - viewportWidth);
+          
+          // Update date display
+          const updateDateDisplay = (scrollLeft: number) => {
+            const dayOffset = Math.round(scrollLeft / pxPerDay);
+            const endDayOffset = Math.min(horizon, dayOffset + Math.round(viewportWidth / pxPerDay));
+            // @ts-ignore callable moment
+            const startDate = (today.clone() as any).add(dayOffset, "days").format("MMM DD");
+            // @ts-ignore callable moment
+            const endDate = (today.clone() as any).add(endDayOffset, "days").format("MMM DD, YYYY");
+            dateDisplay.textContent = `${startDate} → ${endDate}`;
+          };
+          
+          // Initialize display
+          updateDateDisplay(rightEl.scrollLeft);
+          
+          // Slider input handler
+          timeSlider.oninput = () => {
+            const scrollPos = (parseFloat(timeSlider.value) / 100) * maxScroll;
+            rightEl.scrollLeft = scrollPos;
+            updateDateDisplay(scrollPos);
+          };
+          
+          // Update slider when user scrolls manually
+          rightEl.addEventListener("scroll", () => {
+            const scrollPercent = maxScroll > 0 ? (rightEl.scrollLeft / maxScroll) * 100 : 0;
+            timeSlider.value = scrollPercent.toString();
+            updateDateDisplay(rightEl.scrollLeft);
+          });
+        }
+      });
     } else {
       const slider = zoomWrap.querySelector<HTMLInputElement>("input");
       if (slider) slider.value = ZOOM_STOPS.indexOf(this.zoomPxPerDay).toString();
@@ -1659,6 +1804,18 @@ export class TimelineView extends ItemView {
 
       if (date.isSame(realToday, "day")) dayCell.addClass("pm-tl-today");
       if (date.day() === 0 || date.day() === 6) dayCell.addClass("pm-tl-weekend");
+
+      // Add week start label (Thursday)
+      if (date.day() === 4) {
+        const weekLabel = dayCell.createEl("div", {
+          cls: "pm-week-label",
+          text: date.format("M/D"),
+        });
+        weekLabel.style.fontSize = "10px";
+        weekLabel.style.color = "var(--text-muted)";
+        weekLabel.style.textAlign = "center";
+        weekLabel.style.marginTop = "2px";
+      }
 
       if (date.date() === 1) {
         dayCell.addClass("pm-tl-month-start");
@@ -1860,6 +2017,68 @@ export class TimelineView extends ItemView {
       this.batchRender("tooltip-toggle");
     };
     
+    /* ---------- hide completed tasks toggle ---------- */
+    const hideCompletedToggle = rightControls.createEl("span", { cls: "pm-hide-completed-toggle" });
+    attachTip(hideCompletedToggle, "Hide / show completed tasks");
+
+    const updateHideCompletedIcon = () => {
+      setIcon(hideCompletedToggle, "check-circle");
+      hideCompletedToggle.classList.toggle("off", !this.plugin.settings.hideCompletedTasks);
+    };
+    updateHideCompletedIcon();
+
+    hideCompletedToggle.onclick = async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.plugin.settings.hideCompletedTasks = !this.plugin.settings.hideCompletedTasks;
+      this.pendingSettingsChanges = true;
+      updateHideCompletedIcon();
+      this.batchRender("hide-completed-toggle");
+    };
+    
+    /* ---------- hide on-hold tasks toggle ---------- */
+    const hideOnHoldToggle = rightControls.createEl("span", { cls: "pm-hide-onhold-toggle" });
+    attachTip(hideOnHoldToggle, "Hide / show on-hold tasks");
+
+    const updateHideOnHoldIcon = () => {
+      setIcon(hideOnHoldToggle, "pause-circle");
+      hideOnHoldToggle.classList.toggle("off", !this.plugin.settings.hideOnHoldTasks);
+    };
+    updateHideOnHoldIcon();
+
+    hideOnHoldToggle.onclick = async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.plugin.settings.hideOnHoldTasks = !this.plugin.settings.hideOnHoldTasks;
+      this.pendingSettingsChanges = true;
+      updateHideOnHoldIcon();
+      this.batchRender("hide-onhold-toggle");
+    };
+    
+    /* ---------- export timeline as image ---------- */
+    const exportImageToggle = rightControls.createEl("span", { cls: "pm-export-toggle" });
+    attachTip(exportImageToggle, "Export timeline as image");
+
+    setIcon(exportImageToggle, "image");
+    
+    exportImageToggle.onclick = async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await this.exportAsImage();
+    };
+    
+    /* ---------- export timeline as HTML ---------- */
+    const exportHtmlToggle = rightControls.createEl("span", { cls: "pm-export-html-toggle" });
+    attachTip(exportHtmlToggle, "Export timeline as HTML");
+
+    setIcon(exportHtmlToggle, "download");
+    
+    exportHtmlToggle.onclick = async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await this.exportAsHtml();
+    };
+    
     /* ---------- milestone ON / OFF toggle button ---------- */
     const milestoneToggle = rightControls.createEl("span", { cls: "pm-milestone-toggle" });
     attachTip(milestoneToggle, "Show / hide milestone guidelines");
@@ -1973,7 +2192,33 @@ export class TimelineView extends ItemView {
      *          └─ Sub‑task
      * Tasks that have no Epic/Story reference keep their original relative order.
      */
-    const orderTasks = (tasks: TaskItem[]): TaskItem[] => {
+    const orderTasks = (tasks: TaskItem[], projectPath: string): TaskItem[] => {
+      // Filter out completed and on-hold tasks if settings enabled
+      tasks = tasks.filter(t => {
+        if (this.plugin.settings.hideCompletedTasks && tlIsTaskDone(t)) return false;
+        if (this.plugin.settings.hideOnHoldTasks && tlIsTaskOnHold(t)) return false;
+        return true;
+      });
+      
+      // Filter out collapsed child tasks
+      tasks = tasks.filter(t => {
+        const taskKey = `${projectPath}::${t.id.toLowerCase()}`;
+        
+        // Check if parent Epic is collapsed
+        const epicId = t.props["epic"]?.trim();
+        if (epicId && this.collapsedTasks.has(`${projectPath}::${epicId.toLowerCase()}`)) {
+          return false;
+        }
+        
+        // Check if parent Story is collapsed
+        const storyId = t.props["story"]?.trim();
+        if (storyId && this.collapsedTasks.has(`${projectPath}::${storyId.toLowerCase()}`)) {
+          return false;
+        }
+        
+        return true;
+      });
+
       const done = new Set<TaskItem>();
       const out: TaskItem[] = [];
 
@@ -2145,7 +2390,8 @@ export class TimelineView extends ItemView {
                 `<span><strong>Title:</strong> ${label}</span><br>` +
                 `<span><strong>Date:</strong> ${m.date}</span>` +
                 (desc ? `<br>${desc}` : "");
-              milestoneMap.set(off, html);
+              const labelText = label;  // Use title, not description
+              milestoneMap.set(off, `${html}|||${labelText}`);
               projMilestones.push({ off, html });
             });
         }
@@ -2297,7 +2543,7 @@ export class TimelineView extends ItemView {
 
       /* ─── show sub-task bars when the task list is hidden (barsMode === true) ─── */
       if (barsMode || this.collapsed.has(project.file.path)) {
-        orderTasks(project.tasks).forEach((task) => {
+        orderTasks(project.tasks, project.file.path).forEach((task) => {
           let dueIso = (task.props["due"] ?? "").replace(/\u00A0/g, " ").trim();
           if (!dueIso) return;
 
@@ -2324,6 +2570,10 @@ export class TimelineView extends ItemView {
           bar.style.left  = `${startOff * pxPerDay}px`;
           bar.style.width = `${Math.max(spanDays * pxPerDay, 3)}px`;
           bar.style.zIndex = "2";
+
+          // Add priority border color
+          const priority = getTaskPriority(task);
+          if (priority) bar.addClass(`pm-priority-${priority}`);
 
           // ── track pointer movement so we can suppress post-drag clicks ──
           let dragMoved  = false;
@@ -2380,6 +2630,8 @@ export class TimelineView extends ItemView {
               const raw  = task.text.split("\n")[0].trim();
               const shortTxt = raw.length > 70 ? raw.slice(0, 67) + "…" : raw;
               const who = (task.props["assignee"] ?? "").replace(/\u00A0/g, " ").trim() || "—";
+              const priority = getTaskPriority(task);
+              const priorityText = priority ? priority.charAt(0).toUpperCase() + priority.slice(1) : "—";
               
               let idPrefix = "";
               {
@@ -2393,7 +2645,8 @@ export class TimelineView extends ItemView {
               return `<strong>${idPrefix}${shortTxt}</strong>${desc ? `<br><em>${desc}</em>` : ""}`
                    + `<br><span>Start: ${fmt(startIso)}</span>`
                    + `<br><span>Due&nbsp;&nbsp;: ${fmt(dueIso)}</span>`
-                   + `<br><span>Assignee:&nbsp;${who}</span>`;              
+                   + `<br><span>Assignee:&nbsp;${who}</span>`
+                   + `<br><span>Priority: ${priorityText}</span>`;              
             };
 
             bar.addEventListener("mouseenter", (ev) => {
@@ -2434,7 +2687,8 @@ export class TimelineView extends ItemView {
                 `<span><strong>Project:</strong> ${project.file.basename}</span><br>` +
                 `<strong>${task.id}</strong><br>${dueIso}` +   // use dueIso here
                 (desc ? `<br>${desc}` : "");
-              milestoneMap.set(startOff, html);     // or startOff
+              const labelText = task.id;  // Use task ID
+              milestoneMap.set(startOff, `${html}|||${labelText}`);     // or startOff
               projMilestones.push({ off: startOff, html });
             }
           }
@@ -2727,14 +2981,38 @@ export class TimelineView extends ItemView {
           continue;
         }
         // Render one row per task *and* draw its bar in that row
-        orderTasks(project.tasks).forEach((task) => {
+        orderTasks(project.tasks, project.file.path).forEach((task) => {
           /* ----- task row: left pane ----- */
           const taskRowLeft = leftPane.createEl("div", { cls: "pm-tl-taskrow" });
+          
+          // Add collapse caret for Epic/Story tasks
+          const taskId = task.id.toLowerCase();
+          if (taskId.startsWith("e-") || taskId.startsWith("s-")) {
+            const taskKey = `${project.file.path}::${taskId}`;
+            const isCollapsed = this.collapsedTasks.has(taskKey);
+            const caret = taskRowLeft.createEl("span", { cls: "pm-task-caret" });
+            caret.textContent = isCollapsed ? "▶" : "▼";
+            caret.addEventListener("click", (e) => {
+              e.stopPropagation();
+              if (this.collapsedTasks.has(taskKey)) {
+                this.collapsedTasks.delete(taskKey);
+              } else {
+                this.collapsedTasks.add(taskKey);
+              }
+              this.render();
+            });
+          }
+          
           if (tlIsTaskDone(task)) {
             const chk = taskRowLeft.createEl("span");
             setIcon(chk, "check-circle");
             chk.addClass("pm-task-check");
             chk.style.marginRight = "4px";
+          } else if (tlIsTaskOnHold(task)) {
+            const hold = taskRowLeft.createEl("span");
+            setIcon(hold, "pause-circle");
+            hold.addClass("pm-task-hold");
+            hold.style.marginRight = "4px";
           } else {
             taskRowLeft.createEl("span", { text: "• " });
           }
@@ -2792,11 +3070,14 @@ export class TimelineView extends ItemView {
               const who = (task.props["assignee"] ?? "").replace(/\u00A0/g, " ").trim() || "—";
               const fmt = (s: string) => (s && s.trim() !== "" ? s.trim() : "—");
               const desc = getDescription(task);
+              const priority = getTaskPriority(task);
+              const priorityText = priority ? priority.charAt(0).toUpperCase() + priority.slice(1) : "—";
               const html = `
                 <strong>${idPrefix}${shortTxt}</strong>${desc ? `<br><em>${desc}</em>` : ""}
                 <br><span>Start: ${fmt(startIso)}</span>
                 <br><span>Due&nbsp;&nbsp;: ${fmt(dueIso)}</span>
                 <br><span>Assignee:&nbsp;${who}</span>
+                <br><span>Priority: ${priorityText}</span>
               `;
 
               tip = document.createElement("div");
@@ -2897,6 +3178,10 @@ export class TimelineView extends ItemView {
 
           const bar = taskBarWrap.createEl("div", { cls: "pm-tl-bar" });
         
+          // Add priority border color
+          const priority = getTaskPriority(task);
+          if (priority) bar.addClass(`pm-priority-${priority}`);
+        
           const taskKey = key(task);
           (bar as any).dataset.task = taskKey;
           bar.addEventListener("mouseenter", () => highlightArrows(taskKey, true));
@@ -2925,8 +3210,12 @@ export class TimelineView extends ItemView {
               bar.addClass("pm-bar-s");          // grey
             }
           }
-          /* --- urgency colour by due date (skip completed tasks) --- */
-          if (!task.checked) {
+          /* --- done/on-hold/urgency colour --- */
+          if (tlIsTaskDone(task)) {
+            bar.addClass("pm-tl-bar-done");
+          } else if (tlIsTaskOnHold(task)) {
+            bar.addClass("pm-tl-bar-hold");
+          } else if (!task.checked) {
             if (dayOffset < 0) {
               bar.addClass("pm-bar-overdue");   // red
             } else if (dayOffset <= 10) {
@@ -2976,7 +3265,9 @@ export class TimelineView extends ItemView {
                 `<span><strong>Project:</strong> ${project.file.basename}</span><br>` +
                 `<strong>${task.id}</strong><br>${dueIso}` +        // or dueIsoBar
                 (desc ? `<br>${desc}` : "");
-              milestoneMap.set(startOffset, html);     // or startOff
+              // Store both HTML and task info for label
+              const labelText = desc || task.id;
+              milestoneMap.set(startOffset, `${html}|||${labelText}`);     // or startOff
             }
           }
           
@@ -3158,6 +3449,8 @@ export class TimelineView extends ItemView {
               const raw  = task.text.split("\n")[0].trim();
               const shortTxt = raw.length > 70 ? raw.slice(0, 67) + "…" : raw;
               const who = (task.props["assignee"] ?? "").replace(/\u00A0/g, " ").trim() || "—";
+              const priority = getTaskPriority(task);
+              const priorityText = priority ? priority.charAt(0).toUpperCase() + priority.slice(1) : "—";
               
               let idPrefix = "";
               {
@@ -3171,7 +3464,8 @@ export class TimelineView extends ItemView {
               return `<strong>${idPrefix}${shortTxt}</strong>${desc ? `<br><em>${desc}</em>` : ""}`
                    + `<br><span>Start: ${fmt(startIso)}</span>`
                    + `<br><span>Due&nbsp;&nbsp;: ${fmt(dueIso)}</span>`
-                   + `<br><span>Assignee:&nbsp;${who}</span>`;
+                   + `<br><span>Assignee:&nbsp;${who}</span>`
+                   + `<br><span>Priority: ${priorityText}</span>`;
             };
 
             bar.addEventListener("mouseenter", (ev) => {
@@ -3370,7 +3664,7 @@ export class TimelineView extends ItemView {
       }
 
       if (!barsMode && !this.collapsed.has(project.file.path)) {
-        orderTasks(project.tasks).forEach((task) => {
+        orderTasks(project.tasks, project.file.path).forEach((task) => {
           /* --- ensure every task has an anchor so arrows can attach --- */
           const anchor = barWrap.createEl("div", { cls: "pm-tl-anchor" });
           anchor.style.left   = "0px";
@@ -3382,6 +3676,25 @@ export class TimelineView extends ItemView {
           tasksById.set(key(task), task);
           // Collapsed-tasks block: show icon for completed tasks
           const taskRowLeft = leftPane.createEl("div", { cls: "pm-tl-taskrow" });
+          
+          // Add collapse caret for Epic/Story tasks
+          const taskId = task.id.toLowerCase();
+          if (taskId.startsWith("e-") || taskId.startsWith("s-")) {
+            const taskKey = `${project.file.path}::${taskId}`;
+            const isCollapsed = this.collapsedTasks.has(taskKey);
+            const caret = taskRowLeft.createEl("span", { cls: "pm-task-caret" });
+            caret.textContent = isCollapsed ? "▶" : "▼";
+            caret.addEventListener("click", (e) => {
+              e.stopPropagation();
+              if (this.collapsedTasks.has(taskKey)) {
+                this.collapsedTasks.delete(taskKey);
+              } else {
+                this.collapsedTasks.add(taskKey);
+              }
+              this.render();
+            });
+          }
+          
           if (tlIsTaskDone(task)) {
             const chk = taskRowLeft.createEl("span");
             setIcon(chk, "check-circle");
@@ -3407,6 +3720,10 @@ export class TimelineView extends ItemView {
 
           const bar = barWrap.createEl("div", { cls: "pm-tl-bar" });
         
+          // Add priority border color
+          const priority = getTaskPriority(task);
+          if (priority) bar.addClass(`pm-priority-${priority}`);
+        
           // ── track pointer movement so we can suppress post-drag clicks ──
           let dragMoved  = false;
           let dragStartX = 0;
@@ -3430,8 +3747,12 @@ export class TimelineView extends ItemView {
               bar.addClass("pm-bar-s");          // grey
             }
           }
-          /* --- urgency colour by due date (skip completed tasks) --- */
-          if (!task.checked) {
+          /* --- done/on-hold/urgency colour --- */
+          if (tlIsTaskDone(task)) {
+            bar.addClass("pm-tl-bar-done");
+          } else if (tlIsTaskOnHold(task)) {
+            bar.addClass("pm-tl-bar-hold");
+          } else if (!task.checked) {
             if (dayOffset < 0) {
               bar.addClass("pm-bar-overdue");   // red
             } else if (dayOffset <= 10) {
@@ -3482,7 +3803,8 @@ export class TimelineView extends ItemView {
                 `<span><strong>Project:</strong> ${project.file.basename}</span><br>` +
                 `<strong>${task.id}</strong><br>${dueIso}` +        // or dueIsoBar
                 (desc ? `<br>${desc}` : "");
-              milestoneMap.set(startOffset, html);     // or startOff
+              const labelText = task.id;  // Use task ID
+              milestoneMap.set(startOffset, `${html}|||${labelText}`);     // or startOff
             }  
           }        
           bar.style.left  = `${startOffset * pxPerDay}px`;
@@ -4142,5 +4464,392 @@ export class TimelineView extends ItemView {
       this.renderQueued = false;
       this.render();
     });
+  }
+
+  /** Export timeline as image using html2canvas-like approach */
+  private async exportAsImage() {
+    try {
+      new Notice("Preparing timeline export...");
+      
+      const outer = this.containerEl.querySelector('.pm-tl-outer') as HTMLElement;
+      if (!outer) {
+        new Notice("Timeline not found");
+        return;
+      }
+
+      const leftPane = outer.querySelector('.pm-tl-left') as HTMLElement;
+      const rightPane = outer.querySelector('.pm-tl-right') as HTMLElement;
+      
+      if (!leftPane || !rightPane) {
+        new Notice("Timeline structure not found");
+        return;
+      }
+
+      // Clone both panes
+      const leftClone = leftPane.cloneNode(true) as HTMLElement;
+      const rightClone = rightPane.cloneNode(true) as HTMLElement;
+      
+      // Create a wrapper for both clones
+      const wrapper = document.createElement('div');
+      wrapper.style.position = 'absolute';
+      wrapper.style.left = '-99999px';
+      wrapper.style.top = '0';
+      wrapper.style.display = 'flex';
+      wrapper.style.overflow = 'visible';
+      
+      // Style left clone
+      leftClone.style.width = leftPane.offsetWidth + 'px';
+      leftClone.style.height = 'auto';
+      leftClone.style.overflow = 'visible';
+      leftClone.style.flexShrink = '0';
+      
+      // Style right clone to show full content
+      rightClone.style.width = rightPane.scrollWidth + 'px';
+      rightClone.style.height = rightPane.scrollHeight + 'px';
+      rightClone.style.overflow = 'visible';
+      
+      // Expand sticky header in right clone
+      const headerWrap = rightClone.querySelector('.pm-tl-headwrap') as HTMLElement;
+      if (headerWrap) {
+        headerWrap.style.position = 'relative';
+        headerWrap.style.top = '0';
+        headerWrap.style.width = rightPane.scrollWidth + 'px';
+      }
+      
+      const bodyWrap = rightClone.querySelector('.pm-tl-bodywrap') as HTMLElement;
+      if (bodyWrap) {
+        bodyWrap.style.width = rightPane.scrollWidth + 'px';
+      }
+      
+      wrapper.appendChild(leftClone);
+      wrapper.appendChild(rightClone);
+      document.body.appendChild(wrapper);
+      
+      // Wait for layout
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Calculate total dimensions
+      const totalWidth = leftClone.offsetWidth + rightClone.scrollWidth;
+      const totalHeight = Math.max(leftClone.scrollHeight, rightClone.scrollHeight);
+      
+      // Create canvas
+      const scale = 2;
+      const canvas = document.createElement('canvas');
+      canvas.width = totalWidth * scale;
+      canvas.height = totalHeight * scale;
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        document.body.removeChild(wrapper);
+        new Notice("Failed to create canvas");
+        return;
+      }
+      
+      ctx.scale(scale, scale);
+      
+      // Fill background
+      const isDark = document.body.classList.contains('theme-dark');
+      ctx.fillStyle = isDark ? '#1e1e1e' : '#ffffff';
+      ctx.fillRect(0, 0, totalWidth, totalHeight);
+      
+      // Recursive function to draw elements
+      const drawNode = (node: HTMLElement, baseRect: DOMRect) => {
+        const styles = window.getComputedStyle(node);
+        if (styles.display === 'none' || styles.visibility === 'hidden') return;
+        
+        const rect = node.getBoundingClientRect();
+        const x = rect.left - baseRect.left;
+        const y = rect.top - baseRect.top;
+        
+        // Skip elements that are outside the visible area
+        if (rect.width === 0 || rect.height === 0) return;
+        
+        // Draw background
+        const bgColor = styles.backgroundColor;
+        if (bgColor && bgColor !== 'rgba(0, 0, 0, 0)' && bgColor !== 'transparent') {
+          ctx.fillStyle = bgColor;
+          ctx.fillRect(x, y, rect.width, rect.height);
+        }
+        
+        // Draw border (all sides)
+        const borderTopWidth = parseFloat(styles.borderTopWidth) || 0;
+        const borderRightWidth = parseFloat(styles.borderRightWidth) || 0;
+        const borderBottomWidth = parseFloat(styles.borderBottomWidth) || 0;
+        const borderLeftWidth = parseFloat(styles.borderLeftWidth) || 0;
+        
+        if (borderTopWidth > 0 || borderRightWidth > 0 || borderBottomWidth > 0 || borderLeftWidth > 0) {
+          if (borderTopWidth > 0) {
+            ctx.strokeStyle = styles.borderTopColor || styles.borderColor || '#000';
+            ctx.lineWidth = borderTopWidth;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x + rect.width, y);
+            ctx.stroke();
+          }
+          if (borderRightWidth > 0) {
+            ctx.strokeStyle = styles.borderRightColor || styles.borderColor || '#000';
+            ctx.lineWidth = borderRightWidth;
+            ctx.beginPath();
+            ctx.moveTo(x + rect.width, y);
+            ctx.lineTo(x + rect.width, y + rect.height);
+            ctx.stroke();
+          }
+          if (borderBottomWidth > 0) {
+            ctx.strokeStyle = styles.borderBottomColor || styles.borderColor || '#000';
+            ctx.lineWidth = borderBottomWidth;
+            ctx.beginPath();
+            ctx.moveTo(x, y + rect.height);
+            ctx.lineTo(x + rect.width, y + rect.height);
+            ctx.stroke();
+          }
+          if (borderLeftWidth > 0) {
+            ctx.strokeStyle = styles.borderLeftColor || styles.borderColor || '#000';
+            ctx.lineWidth = borderLeftWidth;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x, y + rect.height);
+            ctx.stroke();
+          }
+        }
+        
+        // Draw status icons (check-circle, pause-circle, etc.)
+        if (node.classList.contains('pm-task-check') || node.classList.contains('pm-task-hold')) {
+          const centerX = x + rect.width / 2;
+          const centerY = y + rect.height / 2;
+          const radius = Math.min(rect.width, rect.height) / 3;
+          
+          ctx.save();
+          ctx.strokeStyle = styles.color;
+          ctx.fillStyle = styles.color;
+          ctx.lineWidth = 1.5;
+          
+          // Draw circle
+          ctx.beginPath();
+          ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+          ctx.stroke();
+          
+          if (node.classList.contains('pm-task-check')) {
+            // Draw checkmark
+            ctx.beginPath();
+            ctx.moveTo(centerX - radius * 0.5, centerY);
+            ctx.lineTo(centerX - radius * 0.1, centerY + radius * 0.5);
+            ctx.lineTo(centerX + radius * 0.6, centerY - radius * 0.5);
+            ctx.stroke();
+          } else if (node.classList.contains('pm-task-hold')) {
+            // Draw pause bars
+            const barWidth = radius * 0.3;
+            const barHeight = radius * 1.2;
+            ctx.fillRect(centerX - radius * 0.4, centerY - barHeight / 2, barWidth, barHeight);
+            ctx.fillRect(centerX + radius * 0.1, centerY - barHeight / 2, barWidth, barHeight);
+          }
+          
+          ctx.restore();
+        }
+        
+        // First, recursively draw children
+        Array.from(node.children).forEach(child => {
+          if (child instanceof HTMLElement) {
+            drawNode(child, baseRect);
+          }
+        });
+        
+        // Then draw text on top (for elements with direct text nodes)
+        let textContent = '';
+        node.childNodes.forEach(child => {
+          if (child.nodeType === Node.TEXT_NODE) {
+            textContent += child.textContent || '';
+          }
+        });
+        
+        textContent = textContent.trim();
+        if (textContent) {
+          ctx.save();
+          ctx.fillStyle = styles.color;
+          const fontStyle = styles.fontStyle !== 'normal' ? styles.fontStyle + ' ' : '';
+          const fontWeight = styles.fontWeight !== 'normal' && styles.fontWeight !== '400' ? styles.fontWeight + ' ' : '';
+          ctx.font = `${fontStyle}${fontWeight}${styles.fontSize} ${styles.fontFamily}`;
+          ctx.textBaseline = 'top';
+          
+          const paddingLeft = parseFloat(styles.paddingLeft) || 0;
+          const paddingTop = parseFloat(styles.paddingTop) || 0;
+          
+          // Handle text alignment
+          const align = styles.textAlign;
+          if (align === 'center') {
+            ctx.textAlign = 'center';
+            ctx.fillText(textContent, x + rect.width / 2, y + paddingTop);
+          } else if (align === 'right') {
+            ctx.textAlign = 'right';
+            ctx.fillText(textContent, x + rect.width - paddingLeft, y + paddingTop);
+          } else {
+            ctx.textAlign = 'left';
+            ctx.fillText(textContent, x + paddingLeft, y + paddingTop, rect.width - paddingLeft * 2);
+          }
+          
+          ctx.restore();
+        }
+      };
+      
+      const wrapperRect = wrapper.getBoundingClientRect();
+      
+      // Draw left pane
+      drawNode(leftClone, wrapperRect);
+      
+      // Draw right pane
+      drawNode(rightClone, wrapperRect);
+      
+      // Remove wrapper
+      document.body.removeChild(wrapper);
+      
+      // Convert to blob and download
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          new Notice("Failed to create image");
+          return;
+        }
+
+        const timestamp = (moment as any)().format('YYYY-MM-DD-HHmmss');
+        const filename = `timeline-${timestamp}.png`;
+
+        try {
+          const downloadUrl = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.download = filename;
+          link.href = downloadUrl;
+          link.click();
+          URL.revokeObjectURL(downloadUrl);
+          
+          new Notice(`Timeline exported: ${filename}`);
+        } catch (error) {
+          console.error("Export error:", error);
+          new Notice("Failed to export image");
+        }
+      }, 'image/png', 0.95);
+
+    } catch (error) {
+      console.error("Export error:", error);
+      new Notice(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /** Export timeline as standalone HTML page */
+  private async exportAsHtml() {
+    try {
+      new Notice("Preparing HTML export...");
+      
+      const outer = this.containerEl.querySelector('.pm-tl-outer') as HTMLElement;
+      if (!outer) {
+        new Notice("Timeline not found");
+        return;
+      }
+
+      // Clone the timeline
+      const clone = outer.cloneNode(true) as HTMLElement;
+      
+      // Collect all computed styles from the original
+      const collectStyles = (element: Element, clone: Element) => {
+        if (element instanceof HTMLElement && clone instanceof HTMLElement) {
+          const styles = window.getComputedStyle(element);
+          const cssText = Array.from(styles).map(prop => 
+            `${prop}: ${styles.getPropertyValue(prop)};`
+          ).join('\n');
+          clone.setAttribute('style', cssText);
+          
+          // Recursively process children
+          Array.from(element.children).forEach((child, i) => {
+            if (clone.children[i]) {
+              collectStyles(child, clone.children[i]);
+            }
+          });
+        }
+      };
+      
+      collectStyles(outer, clone);
+      
+      // Get all stylesheet rules
+      let cssRules = '';
+      Array.from(document.styleSheets).forEach(sheet => {
+        try {
+          if (sheet.cssRules) {
+            Array.from(sheet.cssRules).forEach(rule => {
+              cssRules += rule.cssText + '\n';
+            });
+          }
+        } catch (e) {
+          // Skip cross-origin stylesheets
+        }
+      });
+      
+      // Build complete HTML document
+      const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Timeline Export - ${(moment as any)().format('YYYY-MM-DD HH:mm')}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      padding: 20px;
+    }
+    .container {
+      max-width: 100%;
+      background: white;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .header {
+      background: #2c3e50;
+      color: white;
+      padding: 15px 20px;
+      font-size: 18px;
+      font-weight: 600;
+    }
+    .timeline-wrapper {
+      overflow: auto;
+      padding: 10px;
+    }
+    ${cssRules}
+    
+    /* Override for standalone display */
+    .pm-tl-outer {
+      width: 100% !important;
+      height: auto !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      Project Timeline - Exported ${(moment as any)().format('YYYY-MM-DD HH:mm:ss')}
+    </div>
+    <div class="timeline-wrapper">
+      ${clone.outerHTML}
+    </div>
+  </div>
+</body>
+</html>`;
+
+      // Create blob and download
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const timestamp = (moment as any)().format('YYYY-MM-DD-HHmmss');
+      const filename = `timeline-${timestamp}.html`;
+      
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = downloadUrl;
+      link.click();
+      URL.revokeObjectURL(downloadUrl);
+      
+      new Notice(`Timeline exported: ${filename}`);
+      
+    } catch (error) {
+      console.error("HTML export error:", error);
+      new Notice(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 }

@@ -28,6 +28,8 @@ export interface PmSettings {
   showTooltips: boolean;          // toggle bar tooltips/popups
   showBarShadows: boolean;        // toggle bar shadows
   allowBarMove: boolean;           // enable Alt‑drag bar move
+  hideCompletedTasks: boolean;     // hide completed/done tasks
+  hideOnHoldTasks: boolean;        // hide on-hold tasks
   timelineStart?: string;         // ISO YYYY‑MM‑DD for timeline start (empty = today)
   timelineEnd?:   string;         // ISO YYYY‑MM‑DD for timeline end   (empty = auto)
   zoomPxPerDay: number;      // default zoom level (px per day)
@@ -90,6 +92,8 @@ export const DEFAULT_SETTINGS: PmSettings = {
   showTooltips: true,
   showBarShadows: true,
   allowBarMove: true,
+  hideCompletedTasks: false,
+  hideOnHoldTasks: false,
   timelineStart: "",
   timelineEnd: "",
   zoomPxPerDay: 4,

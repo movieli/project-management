@@ -19,6 +19,8 @@ export interface PmSettings {
     showTooltips: boolean;
     showBarShadows: boolean;
     allowBarMove: boolean;
+    hideCompletedTasks: boolean;
+    hideOnHoldTasks: boolean;
     timelineStart?: string;
     timelineEnd?: string;
     zoomPxPerDay: number;

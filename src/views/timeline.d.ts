@@ -37,6 +37,8 @@ export declare class TimelineView extends ItemView {
     private hiddenProjects;
     /** Whether to hide bars when projects are collapsed */
     private hideBarsWhenCollapsed;
+    /** Collapsed Epic/Story tasks for hierarchical collapse */
+    private collapsedTasks;
     /** Optional set of project file paths to display (injected by Portfolio view) */
     private filterPaths?;
     /** Optional name of the portfolio that opened this timeline */
@@ -98,4 +100,8 @@ export declare class TimelineView extends ItemView {
     /** Queue a scroll‑preserving re‑render. Multiple calls within
      *  the same animation frame coalesce into a single render. */
     saveAndRender(): void;
+    /** Export timeline as image using html2canvas-like approach */
+    private exportAsImage;
+    /** Export timeline as standalone HTML page */
+    private exportAsHtml;
 }
